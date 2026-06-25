@@ -73,3 +73,28 @@ export type TreeLayout = {
   edges: TreeEdge[];
   positions: Record<NodeId, { column: number; row: number }>;
 };
+
+export type CompressedTreeSegment = {
+  id: string;
+  parentSegmentId: string | null;
+  childSegmentIds: string[];
+  nodeIds: NodeId[];
+  startPly: number;
+  endPly: number;
+};
+
+export type CompressedTreeEdge = {
+  from: string;
+  to: string;
+};
+
+export type CompressedTreeLayout = {
+  rootSegmentId: string;
+  segments: Record<string, CompressedTreeSegment>;
+  columns: Array<{
+    ply: number;
+    segmentIds: string[];
+  }>;
+  edges: CompressedTreeEdge[];
+  positions: Record<string, { column: number; row: number }>;
+};

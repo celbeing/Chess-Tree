@@ -9,6 +9,7 @@ type ChessBoardProps = {
   marks: BoardMark[];
   arrows: BoardArrow[];
   size: number;
+  variant?: "main" | "mini";
   selectedSquare?: string;
   onSquareClick?: (square: string) => void;
 };
@@ -36,74 +37,90 @@ export function ChessBoard({
   marks,
   arrows,
   size,
+  variant = "main",
   selectedSquare,
   onSquareClick,
 }: ChessBoardProps) {
   const pieces = parseFenPieces(fen);
   const lastMoveSquares = lastMoveUci ? [lastMoveUci.slice(0, 2), lastMoveUci.slice(2, 4)] : [];
   const markBySquare = new Map(marks.map((mark) => [mark.square, mark]));
-  const boardSize = Math.max(260, Math.min(size, 560));
+  const boardSize = variant === "mini" ? Math.max(120, Math.min(size, 220)) : Math.max(260, Math.min(size, 560));
 
   return (
-    <div className="board-shell" style={{ "--board-size": `${boardSize}px` } as CSSProperties}>
-      <div className="chess-board">
-        {RANKS.map((rank) =>
-          FILES.map((file) => {
-            const square = `${file}${rank}`;
-            const isLight = (FILES.indexOf(file) + rank) % 2 === 1;
-            const mark = markBySquare.get(square);
-            const isLastMove = lastMoveSquares.includes(square);
-            const isSelected = selectedSquare === square;
+    <div
+      className={variant === "mini" ? "board-shell mini-board-shell" : "board-shell"}
+      style={{ "--board-size": `${boardSize}px` } as CSSProperties}
+    >
+      <div className="board-with-coordinates">
+        <div className="chess-board">
+          {RANKS.map((rank) =>
+            FILES.map((file) => {
+              const square = `${file}${rank}`;
+              const isLight = (FILES.indexOf(file) + rank) % 2 === 1;
+              const mark = markBySquare.get(square);
+              const isLastMove = lastMoveSquares.includes(square);
+              const isSelected = selectedSquare === square;
 
-            return (
-              <button
-                className={[
-                  "board-square",
-                  isLight ? "light" : "dark",
-                  isLastMove ? "last-move" : "",
-                  isSelected ? "selected-square" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                key={square}
-                onClick={() => onSquareClick?.(square)}
-                style={{ "--mark-color": mark?.color ?? "transparent" } as CSSProperties}
-                type="button"
-              >
-                <span className="piece">{pieces[square] ? PIECES[pieces[square]] : ""}</span>
-                <span className="square-label">{square}</span>
-              </button>
-            );
-          }),
-        )}
-        <svg className="board-arrows" viewBox="0 0 100 100" aria-hidden="true">
-          <defs>
-            <marker id="arrowhead" markerHeight="5" markerWidth="5" orient="auto" refX="4" refY="2.5">
-              <path d="M0,0 L5,2.5 L0,5 Z" fill="#ef476f" />
-            </marker>
-          </defs>
-          {arrows.map((arrow) => {
-            const from = squareCenter(arrow.from);
-            const to = squareCenter(arrow.to);
+              return (
+                <button
+                  className={[
+                    "board-square",
+                    isLight ? "light" : "dark",
+                    isLastMove ? "last-move" : "",
+                    isSelected ? "selected-square" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  disabled={!onSquareClick}
+                  key={square}
+                  onClick={() => onSquareClick?.(square)}
+                  style={{ "--mark-color": mark?.color ?? "transparent" } as CSSProperties}
+                  type="button"
+                >
+                  <span className="piece">{pieces[square] ? PIECES[pieces[square]] : ""}</span>
+                </button>
+              );
+            }),
+          )}
+          <svg className="board-arrows" viewBox="0 0 100 100" aria-hidden="true">
+            <defs>
+              <marker id="arrowhead" markerHeight="5" markerWidth="5" orient="auto" refX="4" refY="2.5">
+                <path d="M0,0 L5,2.5 L0,5 Z" fill="#ef476f" />
+              </marker>
+            </defs>
+            {arrows.map((arrow) => {
+              const from = squareCenter(arrow.from);
+              const to = squareCenter(arrow.to);
 
-            if (!from || !to) {
-              return null;
-            }
+              if (!from || !to) {
+                return null;
+              }
 
-            return (
-              <line
-                className="board-arrow"
-                key={arrow.id}
-                markerEnd="url(#arrowhead)"
-                stroke={arrow.color}
-                x1={from.x}
-                x2={to.x}
-                y1={from.y}
-                y2={to.y}
-              />
-            );
-          })}
-        </svg>
+              return (
+                <line
+                  className="board-arrow"
+                  key={arrow.id}
+                  markerEnd="url(#arrowhead)"
+                  stroke={arrow.color}
+                  x1={from.x}
+                  x2={to.x}
+                  y1={from.y}
+                  y2={to.y}
+                />
+              );
+            })}
+          </svg>
+        </div>
+        <div className="file-coordinates" aria-hidden="true">
+          {FILES.map((file) => (
+            <span key={file}>{file}</span>
+          ))}
+        </div>
+        <div className="rank-coordinates" aria-hidden="true">
+          {RANKS.map((rank) => (
+            <span key={rank}>{rank}</span>
+          ))}
+        </div>
       </div>
     </div>
   );

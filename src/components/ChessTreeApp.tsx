@@ -12,6 +12,7 @@ import {
   clearBoardAnnotations,
   createInitialTree,
   createTreeFromNotation,
+  deleteSubtree,
   formatEngineScore,
   formatMoveLabel,
   getSelectedNode,
@@ -22,7 +23,7 @@ import {
 } from "@/lib/chess-tree/chessTree";
 import { StockfishBrowserEngine } from "@/lib/engine/stockfish";
 
-const SAMPLE_LINE = "1. e4 e5 2. Nf3 Nc6 3. Bb5 Nf6";
+const SAMPLE_LINE = "1. e4 e5 2. Nf3 Nc6 3. Bc4";
 
 export function ChessTreeApp() {
   const { tree, setTree, resetTree, loaded } = usePersistentGameTree();
@@ -44,6 +45,35 @@ export function ChessTreeApp() {
       engineRef.current?.dispose();
     };
   }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target;
+      const tagName = target instanceof HTMLElement ? target.tagName : "";
+      const isEditingText =
+        tagName === "INPUT" || tagName === "TEXTAREA" || (target instanceof HTMLElement && target.isContentEditable);
+
+      if (event.key !== "Delete" || isEditingText || selectedNode.id === tree.rootId) {
+        return;
+      }
+
+      event.preventDefault();
+
+      const confirmed = window.confirm(`Delete ${formatMoveLabel(selectedNode)} and all following moves?`);
+
+      if (!confirmed) {
+        return;
+      }
+
+      setTree((current) => deleteSubtree(current, selectedNode.id));
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedNode, setTree, tree.rootId]);
 
   function handleImport() {
     try {

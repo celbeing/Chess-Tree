@@ -1,8 +1,10 @@
 import { Chess } from "chess.js";
-import { OPENING_BOOK } from "@/lib/data/openings";
+import { OPENING_BOOK, findOpeningForPosition } from "@/lib/data/openings";
 import type {
   BoardArrow,
   BoardMark,
+  CompressedTreeLayout,
+  CompressedTreeSegment,
   EngineScore,
   GameTree,
   MoveNode,
@@ -121,7 +123,8 @@ export function addSanMove(tree: GameTree, parentId: NodeId, san: string, option
 
   const nextId = options.idFactory ?? createDefaultIdFactory();
   const sanPath = [...parent.sanPath, move.san];
-  const opening = findOpeningForPath(sanPath, options.openings ?? OPENING_BOOK);
+  const fen = chess.fen();
+  const opening = findOpeningForPosition(fen, sanPath, options.openings ?? OPENING_BOOK);
   const nodeId = nextId();
   const node: MoveNode = {
     id: nodeId,
@@ -130,7 +133,7 @@ export function addSanMove(tree: GameTree, parentId: NodeId, san: string, option
     ply: parent.ply + 1,
     san: move.san,
     uci,
-    fen: chess.fen(),
+    fen,
     caption: "",
     marks: [],
     arrows: [],
@@ -273,6 +276,34 @@ export function clearBoardAnnotations(tree: GameTree, nodeId: NodeId, now?: () =
   }, now);
 }
 
+export function deleteSubtree(tree: GameTree, nodeId: NodeId, now?: () => string): GameTree {
+  const node = tree.nodes[nodeId];
+
+  if (!node || nodeId === tree.rootId) {
+    return tree;
+  }
+
+  const idsToDelete = collectSubtreeNodeIds(tree, nodeId);
+  const nodes = { ...tree.nodes };
+
+  for (const id of idsToDelete) {
+    delete nodes[id];
+  }
+
+  if (node.parentId && nodes[node.parentId]) {
+    nodes[node.parentId] = {
+      ...nodes[node.parentId],
+      childrenIds: nodes[node.parentId].childrenIds.filter((childId) => !idsToDelete.has(childId)),
+    };
+  }
+
+  return touchTree({
+    ...tree,
+    selectedNodeId: node.parentId ?? tree.rootId,
+    nodes,
+  }, now);
+}
+
 export function buildTreeLayout(tree: GameTree): TreeLayout {
   const nodesByPly = new Map<number, NodeId[]>();
   const edges = Object.values(tree.nodes)
@@ -317,6 +348,153 @@ export function buildTreeLayout(tree: GameTree): TreeLayout {
     edges,
     positions,
   };
+}
+
+export function buildCompressedTreeLayout(tree: GameTree): CompressedTreeLayout {
+  const segments: Record<string, CompressedTreeSegment> = {};
+  const traversalOrder: string[] = [];
+  const rootSegmentId = createSegmentId([tree.rootId]);
+  const rootNode = tree.nodes[tree.rootId];
+  const rootSegment: CompressedTreeSegment = {
+    id: rootSegmentId,
+    parentSegmentId: null,
+    childSegmentIds: [],
+    nodeIds: [tree.rootId],
+    startPly: rootNode?.ply ?? 0,
+    endPly: rootNode?.ply ?? 0,
+  };
+
+  segments[rootSegmentId] = rootSegment;
+  traversalOrder.push(rootSegmentId);
+
+  function createLineSegment(startNodeId: NodeId, parentSegmentId: string): string {
+    const nodeIds: NodeId[] = [];
+    let current = tree.nodes[startNodeId];
+
+    while (current) {
+      nodeIds.push(current.id);
+
+      if (current.childrenIds.length !== 1) {
+        break;
+      }
+
+      current = tree.nodes[current.childrenIds[0]];
+    }
+
+    const firstNode = tree.nodes[nodeIds[0]];
+    const lastNode = tree.nodes[nodeIds[nodeIds.length - 1]];
+    const segmentId = createSegmentId(nodeIds);
+    const segment: CompressedTreeSegment = {
+      id: segmentId,
+      parentSegmentId,
+      childSegmentIds: [],
+      nodeIds,
+      startPly: firstNode.ply,
+      endPly: lastNode.ply,
+    };
+
+    segments[segmentId] = segment;
+    traversalOrder.push(segmentId);
+    segment.childSegmentIds = lastNode.childrenIds.map((childId) => createLineSegment(childId, segmentId));
+
+    return segmentId;
+  }
+
+  rootSegment.childSegmentIds = rootNode?.childrenIds.map((childId) => createLineSegment(childId, rootSegmentId)) ?? [];
+
+  const positions: CompressedTreeLayout["positions"] = {};
+  const startPlyValues = [...new Set(traversalOrder.map((segmentId) => segments[segmentId].startPly))].sort(
+    (a, b) => a - b,
+  );
+  const columnByStartPly = new Map(startPlyValues.map((ply, index) => [ply, index]));
+  const subtreeHeights = new Map<string, number>();
+
+  function getSubtreeHeight(segmentId: string): number {
+    const segment = segments[segmentId];
+
+    if (!segment || segment.childSegmentIds.length === 0) {
+      subtreeHeights.set(segmentId, 1);
+
+      return 1;
+    }
+
+    const height = segment.childSegmentIds.reduce((sum, childSegmentId) => sum + getSubtreeHeight(childSegmentId), 0);
+    subtreeHeights.set(segmentId, Math.max(1, height));
+
+    return subtreeHeights.get(segmentId) as number;
+  }
+
+  function placeSegment(segmentId: string, row: number) {
+    const segment = segments[segmentId];
+
+    if (!segment) {
+      return;
+    }
+
+    positions[segmentId] = {
+      column: columnByStartPly.get(segment.startPly) ?? 0,
+      row,
+    };
+
+    let nextChildRow = row;
+
+    for (const childSegmentId of segment.childSegmentIds) {
+      placeSegment(childSegmentId, nextChildRow);
+      nextChildRow += subtreeHeights.get(childSegmentId) ?? 1;
+    }
+  }
+
+  getSubtreeHeight(rootSegmentId);
+  placeSegment(rootSegmentId, 0);
+
+  const segmentsByColumn = new Map<number, string[]>();
+
+  for (const segmentId of traversalOrder) {
+    const position = positions[segmentId];
+
+    if (!position) {
+      continue;
+    }
+
+    segmentsByColumn.set(position.column, [...(segmentsByColumn.get(position.column) ?? []), segmentId]);
+  }
+
+  const columns = startPlyValues.map((ply, columnIndex) => ({
+    ply,
+    segmentIds: (segmentsByColumn.get(columnIndex) ?? []).sort(
+      (left, right) => positions[left].row - positions[right].row,
+    ),
+  }));
+
+  const edges = Object.values(segments)
+    .filter((segment) => segment.parentSegmentId)
+    .map((segment) => ({
+      from: segment.parentSegmentId as string,
+      to: segment.id,
+    }));
+
+  return {
+    rootSegmentId,
+    segments,
+    columns,
+    edges,
+    positions,
+  };
+}
+
+export function formatSegmentLabel(tree: GameTree, segment: CompressedTreeSegment): string {
+  const firstNode = tree.nodes[segment.nodeIds[0]];
+  const lastNode = tree.nodes[segment.nodeIds[segment.nodeIds.length - 1]];
+
+  if (!firstNode || !lastNode) {
+    return "";
+  }
+
+  if (segment.nodeIds.length === 1) {
+    return formatMoveLabel(firstNode);
+  }
+
+  return `${formatMoveLabel(firstNode)} ... ${formatMoveLabel(lastNode)}`;
 }
 
 export function getSelectedNode(tree: GameTree): MoveNode {
@@ -364,11 +542,7 @@ export function parseMainLineNotation(input: string): string[] {
 }
 
 export function findOpeningForPath(sanPath: string[], openings: OpeningEntry[] = OPENING_BOOK) {
-  return openings.find((opening) => sameMovePath(opening.moves, sanPath));
-}
-
-function sameMovePath(left: string[], right: string[]) {
-  return left.length === right.length && left.every((move, index) => move === right[index]);
+  return findOpeningForPosition("", sanPath, openings);
 }
 
 function cleanSanToken(token: string) {
@@ -413,6 +587,25 @@ function replaceNode(tree: GameTree, node: MoveNode, now?: () => string): GameTr
   }, now);
 }
 
+function collectSubtreeNodeIds(tree: GameTree, nodeId: NodeId): Set<NodeId> {
+  const node = tree.nodes[nodeId];
+  const ids = new Set<NodeId>();
+
+  if (!node) {
+    return ids;
+  }
+
+  ids.add(nodeId);
+
+  for (const childId of node.childrenIds) {
+    for (const descendantId of collectSubtreeNodeIds(tree, childId)) {
+      ids.add(descendantId);
+    }
+  }
+
+  return ids;
+}
+
 function createBoardMark(square: string, color: string): BoardMark {
   return {
     id: `mark-${square}-${Date.now()}`,
@@ -435,4 +628,8 @@ function touchTree(tree: GameTree, now?: () => string): GameTree {
     ...tree,
     updatedAt: now?.() ?? new Date().toISOString(),
   };
+}
+
+function createSegmentId(nodeIds: NodeId[]) {
+  return `segment-${nodeIds[0]}-${nodeIds[nodeIds.length - 1]}`;
 }

@@ -1,4 +1,10 @@
+import { eco as LICHESS_ECO } from "chess-openings/dist/chess/openings/eco";
 import type { OpeningEntry } from "@/lib/chess-tree/types";
+
+export type OpeningMatch = {
+  eco: string;
+  name: string;
+};
 
 export const OPENING_BOOK: OpeningEntry[] = [
   {
@@ -92,3 +98,46 @@ export const OPENING_BOOK: OpeningEntry[] = [
     moves: ["Nf3"],
   },
 ];
+
+export function findOpeningByFen(fen: string): OpeningMatch | undefined {
+  const epd = fenToEpd(fen);
+  const opening = LICHESS_ECO[epd];
+
+  if (!opening) {
+    return undefined;
+  }
+
+  return {
+    eco: opening.eco,
+    name: opening.name,
+  };
+}
+
+export function findOpeningBySanPath(sanPath: string[], openings: OpeningEntry[] = OPENING_BOOK): OpeningMatch | undefined {
+  const opening = openings.find((entry) => sameMovePath(entry.moves, sanPath));
+
+  if (!opening) {
+    return undefined;
+  }
+
+  return {
+    eco: opening.eco,
+    name: opening.name,
+  };
+}
+
+export function findOpeningForPosition(
+  fen: string,
+  sanPath: string[],
+  openings: OpeningEntry[] = OPENING_BOOK,
+): OpeningMatch | undefined {
+  return findOpeningByFen(fen) ?? findOpeningBySanPath(sanPath, openings);
+}
+
+function fenToEpd(fen: string) {
+  return fen.split(/\s+/).slice(0, 4).join(" ");
+}
+
+function sameMovePath(left: string[], right: string[]) {
+  return left.length === right.length && left.every((move, index) => move === right[index]);
+}

@@ -1,6 +1,14 @@
 "use client";
 
-import { formatEngineScore, formatMoveLabel } from "@/lib/chess-tree/chessTree";
+import { useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChessBoard } from "@/components/ChessBoard";
+import {
+  buildCompressedTreeLayout,
+  formatEngineScore,
+  formatMoveLabel,
+  formatSegmentLabel,
+} from "@/lib/chess-tree/chessTree";
 import type { GameTree, NodeId } from "@/lib/chess-tree/types";
 
 type TreeCanvasProps = {
@@ -8,32 +16,35 @@ type TreeCanvasProps = {
   onSelectNode: (nodeId: NodeId) => void;
 };
 
-const COLUMN_WIDTH = 190;
-const ROW_HEIGHT = 116;
-const NODE_WIDTH = 150;
-const NODE_HEIGHT = 82;
+const COLUMN_WIDTH = 280;
+const ROW_HEIGHT = 292;
+const NODE_WIDTH = 230;
+const COLLAPSED_NODE_HEIGHT = 132;
+const EXPANDED_NODE_HEIGHT = 260;
 
 export function TreeCanvas({ tree, onSelectNode }: TreeCanvasProps) {
-  const layout = buildCanvasLayout(tree);
-  const width = Math.max(520, layout.columnCount * COLUMN_WIDTH);
-  const height = Math.max(340, layout.rowCount * ROW_HEIGHT);
+  const [expandedSegmentIds, setExpandedSegmentIds] = useState<Set<string>>(() => new Set());
+  const layout = buildCompressedTreeLayout(tree);
+  const maxRow = Math.max(0, ...Object.values(layout.positions).map((position) => position.row));
+  const width = Math.max(520, layout.columns.length * COLUMN_WIDTH);
+  const height = Math.max(340, (maxRow + 1) * ROW_HEIGHT);
 
   return (
     <div className="tree-scroll">
       <div className="tree-canvas" style={{ width, height }}>
         <svg className="tree-edges" height={height} width={width} aria-hidden="true">
           {layout.edges.map((edge) => {
-            const from = layout.positions[edge.from];
-            const to = layout.positions[edge.to];
+            const from = toCanvasPosition(layout.positions[edge.from]);
+            const to = toCanvasPosition(layout.positions[edge.to]);
 
             if (!from || !to) {
               return null;
             }
 
             const x1 = from.left + NODE_WIDTH;
-            const y1 = from.top + NODE_HEIGHT / 2;
+            const y1 = from.top + nodeHeight(edge.from, expandedSegmentIds) / 2;
             const x2 = to.left;
-            const y2 = to.top + NODE_HEIGHT / 2;
+            const y2 = to.top + nodeHeight(edge.to, expandedSegmentIds) / 2;
             const midX = (x1 + x2) / 2;
 
             return (
@@ -45,32 +56,83 @@ export function TreeCanvas({ tree, onSelectNode }: TreeCanvasProps) {
             );
           })}
         </svg>
-        {Object.values(tree.nodes).map((node) => {
-          const position = layout.positions[node.id];
+        {Object.values(layout.segments).map((segment) => {
+          const position = toCanvasPosition(layout.positions[segment.id]);
 
           if (!position) {
             return null;
           }
 
-          const selected = tree.selectedNodeId === node.id;
+          const selected = segment.nodeIds.includes(tree.selectedNodeId);
+          const expanded = expandedSegmentIds.has(segment.id);
+          const lastNode = tree.nodes[segment.nodeIds[segment.nodeIds.length - 1]];
+          const infoNode = selected ? tree.nodes[tree.selectedNodeId] : lastNode;
+
+          if (!lastNode || !infoNode) {
+            return null;
+          }
 
           return (
-            <button
+            <div
               className={selected ? "tree-node selected" : "tree-node"}
-              key={node.id}
-              onClick={() => onSelectNode(node.id)}
-              style={{ left: position.left, top: position.top, width: NODE_WIDTH, height: NODE_HEIGHT }}
-              type="button"
+              key={segment.id}
+              style={{
+                left: position.left,
+                top: position.top,
+                width: NODE_WIDTH,
+                height: expanded ? EXPANDED_NODE_HEIGHT : COLLAPSED_NODE_HEIGHT,
+              }}
             >
-              <span className="tree-node-label">{formatMoveLabel(node)}</span>
-              {node.ecoCode && node.openingName ? (
+              <div className="tree-node-topline">
+                <button className="tree-node-main" onClick={() => onSelectNode(lastNode.id)} type="button">
+                  <span className="tree-node-label">{formatSegmentLabel(tree, segment)}</span>
+                </button>
+                <button
+                  className="tree-node-expand"
+                  onClick={() => toggleSegment(expandedSegmentIds, setExpandedSegmentIds, segment.id)}
+                  title={expanded ? "Hide board" : "Show board"}
+                  type="button"
+                >
+                  {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                </button>
+              </div>
+              {segment.nodeIds.length > 1 ? (
+                <div className="tree-node-moves">
+                  {segment.nodeIds.map((nodeId) => {
+                    const node = tree.nodes[nodeId];
+
+                    return (
+                      <button
+                        className={tree.selectedNodeId === nodeId ? "tree-node-move active" : "tree-node-move"}
+                        key={nodeId}
+                        onClick={() => onSelectNode(nodeId)}
+                        title={formatMoveLabel(node)}
+                        type="button"
+                      >
+                        {node.san}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {infoNode.ecoCode && infoNode.openingName ? (
                 <span className="tree-node-opening">
-                  {node.ecoCode} {node.openingName}
+                  {infoNode.ecoCode} {infoNode.openingName}
                 </span>
               ) : null}
-              {node.caption ? <span className="tree-node-caption">{node.caption}</span> : null}
-              {node.eval ? <span className="tree-node-eval">{formatEngineScore(node.eval)}</span> : null}
-            </button>
+              {infoNode.caption ? <span className="tree-node-caption">{infoNode.caption}</span> : null}
+              {infoNode.eval ? <span className="tree-node-eval">{formatEngineScore(infoNode.eval)}</span> : null}
+              {expanded ? (
+                <ChessBoard
+                  arrows={infoNode.arrows}
+                  fen={infoNode.fen}
+                  lastMoveUci={infoNode.uci}
+                  marks={infoNode.marks}
+                  size={150}
+                  variant="mini"
+                />
+              ) : null}
+            </div>
           );
         })}
       </div>
@@ -78,44 +140,33 @@ export function TreeCanvas({ tree, onSelectNode }: TreeCanvasProps) {
   );
 }
 
-function buildCanvasLayout(tree: GameTree) {
-  const nodesByPly = new Map<number, NodeId[]>();
-  const edges = Object.values(tree.nodes)
-    .filter((node) => node.parentId)
-    .map((node) => ({
-      from: node.parentId as NodeId,
-      to: node.id,
-    }));
+function nodeHeight(segmentId: string, expandedSegmentIds: Set<string>) {
+  return expandedSegmentIds.has(segmentId) ? EXPANDED_NODE_HEIGHT : COLLAPSED_NODE_HEIGHT;
+}
 
-  function visit(nodeId: NodeId) {
-    const node = tree.nodes[nodeId];
+function toggleSegment(
+  expandedSegmentIds: Set<string>,
+  setExpandedSegmentIds: (value: Set<string>) => void,
+  segmentId: string,
+) {
+  const next = new Set(expandedSegmentIds);
 
-    if (!node) {
-      return;
-    }
-
-    nodesByPly.set(node.ply, [...(nodesByPly.get(node.ply) ?? []), nodeId]);
-    node.childrenIds.forEach(visit);
+  if (next.has(segmentId)) {
+    next.delete(segmentId);
+  } else {
+    next.add(segmentId);
   }
 
-  visit(tree.rootId);
+  setExpandedSegmentIds(next);
+}
 
-  const columns = [...nodesByPly.entries()].sort(([a], [b]) => a - b);
-  const positions: Record<NodeId, { left: number; top: number }> = {};
-
-  columns.forEach(([_, nodeIds], columnIndex) => {
-    nodeIds.forEach((nodeId, row) => {
-      positions[nodeId] = {
-        left: columnIndex * COLUMN_WIDTH + 18,
-        top: row * ROW_HEIGHT + 20,
-      };
-    });
-  });
+function toCanvasPosition(position?: { column: number; row: number }) {
+  if (!position) {
+    return null;
+  }
 
   return {
-    edges,
-    positions,
-    columnCount: columns.length,
-    rowCount: Math.max(1, ...columns.map(([, nodeIds]) => nodeIds.length)),
+    left: position.column * COLUMN_WIDTH + 18,
+    top: position.row * ROW_HEIGHT + 20,
   };
 }
