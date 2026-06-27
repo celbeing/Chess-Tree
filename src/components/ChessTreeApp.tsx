@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Eye, EyeOff, GitBranch, Plus, RotateCcw, Trash2, Upload, Zap } from "lucide-react";
-import { ChessBoard } from "@/components/ChessBoard";
+import { ChessBoard, type BoardMove } from "@/components/ChessBoard";
 import { TreeCanvas } from "@/components/TreeCanvas";
 import { usePersistentGameTree } from "@/hooks/usePersistentGameTree";
 import {
@@ -120,6 +120,20 @@ export function ChessTreeApp() {
   function handleSquareClick(square: string) {
     setSelectedSquare(square);
     setTree((current) => addSquareMark(current, selectedNode.id, square));
+  }
+
+  function handleBoardMove(move: BoardMove) {
+    try {
+      setError("");
+      const result = addSanMove(tree, selectedNode.id, move.san);
+      setTree(result.tree);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not add board move.");
+    }
+  }
+
+  function handleBoardArrow(from: string, to: string) {
+    setTree((current) => addArrow(current, selectedNode.id, from, to));
   }
 
   function handleAddArrow() {
@@ -250,7 +264,9 @@ export function ChessTreeApp() {
               fen={selectedNode.fen}
               lastMoveUci={selectedNode.uci}
               marks={selectedNode.marks}
-              onSquareClick={handleSquareClick}
+              onArrow={handleBoardArrow}
+              onMove={handleBoardMove}
+              onSquareMark={handleSquareClick}
               selectedSquare={selectedSquare}
               size={boardSize}
             />

@@ -1,7 +1,16 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import type { CSSProperties } from "react";
+import { Chess, type Move, type Square } from "chess.js";
 import type { BoardArrow, BoardMark } from "@/lib/chess-tree/types";
+
+export type BoardMove = {
+  from: string;
+  to: string;
+  promotion?: string;
+  san: string;
+};
 
 type ChessBoardProps = {
   fen: string;
@@ -11,7 +20,9 @@ type ChessBoardProps = {
   size: number;
   variant?: "main" | "mini";
   selectedSquare?: string;
-  onSquareClick?: (square: string) => void;
+  onSquareMark?: (square: string) => void;
+  onArrow?: (from: string, to: string) => void;
+  onMove?: (move: BoardMove) => void;
 };
 
 const FILES = ["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -39,12 +50,35 @@ export function ChessBoard({
   size,
   variant = "main",
   selectedSquare,
-  onSquareClick,
+  onSquareMark,
+  onArrow,
+  onMove,
 }: ChessBoardProps) {
+  const chess = useMemo(() => new Chess(fen), [fen]);
   const pieces = parseFenPieces(fen);
   const lastMoveSquares = lastMoveUci ? [lastMoveUci.slice(0, 2), lastMoveUci.slice(2, 4)] : [];
   const markBySquare = new Map(marks.map((mark) => [mark.square, mark]));
   const boardSize = variant === "mini" ? Math.max(120, Math.min(size, 220)) : Math.max(260, Math.min(size, 560));
+  const interactive = variant !== "mini" && Boolean(onSquareMark || onArrow || onMove);
+  const [selectedFrom, setSelectedFrom] = useState("");
+  const [legalMoves, setLegalMoves] = useState<Move[]>([]);
+  const [dragState, setDragState] = useState<
+    | {
+        kind: "piece";
+        from: string;
+        piece: string;
+        moves: Move[];
+        x: number;
+        y: number;
+      }
+    | {
+        kind: "arrow";
+        from: string;
+        button: "right";
+      }
+    | null
+  >(null);
+  const legalTargets = new Set<string>(legalMoves.map((move) => move.to));
 
   return (
     <div
@@ -60,32 +94,130 @@ export function ChessBoard({
               const mark = markBySquare.get(square);
               const isLastMove = lastMoveSquares.includes(square);
               const isSelected = selectedSquare === square;
+              const isSelectedFrom = selectedFrom === square;
+              const isLegalTarget = legalTargets.has(square);
+              const piece = pieces[square];
 
               return (
                 <button
+                  data-square={square}
                   className={[
                     "board-square",
                     isLight ? "light" : "dark",
                     isLastMove ? "last-move" : "",
                     isSelected ? "selected-square" : "",
+                    isSelectedFrom ? "selected-from" : "",
+                    isLegalTarget ? "legal-target" : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
-                  disabled={!onSquareClick}
+                  disabled={!interactive}
                   key={square}
-                  onClick={() => onSquareClick?.(square)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                  }}
+                  onPointerDown={(event) => {
+                    if (!interactive || (event.button !== 0 && event.button !== 2)) {
+                      return;
+                    }
+
+                    event.preventDefault();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+
+                    if (event.button === 2) {
+                      clearMoveSelection(setSelectedFrom, setLegalMoves);
+                      setDragState({
+                        kind: "arrow",
+                        from: square,
+                        button: "right",
+                      });
+                      return;
+                    }
+
+                    handlePointerStart({
+                      chess,
+                      event,
+                      legalMoves,
+                      onMove,
+                      onSelectFrom: (from, moves) => {
+                        setSelectedFrom(from);
+                        setLegalMoves(moves);
+                      },
+                      onClear: () => clearMoveSelection(setSelectedFrom, setLegalMoves),
+                      onPieceDrag: setDragState,
+                      piece,
+                      square,
+                    });
+                  }}
+                  onPointerMove={(event) => {
+                    if (dragState?.kind !== "piece") {
+                      return;
+                    }
+
+                    setDragState({
+                      ...dragState,
+                      x: event.clientX,
+                      y: event.clientY,
+                    });
+                  }}
+                  onPointerUp={(event) => {
+                    if (!interactive || !dragState) {
+                      return;
+                    }
+
+                    const targetSquare = getSquareFromPoint(event.clientX, event.clientY);
+
+                    if (dragState.kind === "arrow") {
+                      if (targetSquare && targetSquare !== dragState.from) {
+                        onArrow?.(dragState.from, targetSquare);
+                      } else if (targetSquare === dragState.from) {
+                        onSquareMark?.(dragState.from);
+                      }
+                      clearMoveSelection(setSelectedFrom, setLegalMoves);
+                      setDragState(null);
+                      return;
+                    }
+
+                    const move = findPreferredMove(dragState.moves, targetSquare);
+
+                    if (move) {
+                      onMove?.({
+                        from: move.from,
+                        to: move.to,
+                        promotion: move.promotion,
+                        san: move.san,
+                      });
+                      clearMoveSelection(setSelectedFrom, setLegalMoves);
+                      setDragState(null);
+                      return;
+                    }
+
+                    if (targetSquare === dragState.from) {
+                      setDragState(null);
+                      return;
+                    }
+
+                    clearMoveSelection(setSelectedFrom, setLegalMoves);
+                    setDragState(null);
+                  }}
+                  onPointerCancel={() => {
+                    clearMoveSelection(setSelectedFrom, setLegalMoves);
+                    setDragState(null);
+                  }}
                   style={{ "--mark-color": mark?.color ?? "transparent" } as CSSProperties}
                   type="button"
                 >
-                  <span className="piece">{pieces[square] ? PIECES[pieces[square]] : ""}</span>
+                  <span className={dragState?.kind === "piece" && dragState.from === square ? "piece dragging-source" : "piece"}>
+                    {piece ? PIECES[piece] : ""}
+                  </span>
                 </button>
               );
             }),
           )}
           <svg className="board-arrows" viewBox="0 0 100 100" aria-hidden="true">
             <defs>
-              <marker id="arrowhead" markerHeight="5" markerWidth="5" orient="auto" refX="4" refY="2.5">
-                <path d="M0,0 L5,2.5 L0,5 Z" fill="#ef476f" />
+              <marker id="arrowhead" markerHeight="3.125" markerWidth="3.125" orient="auto" refX="2.75" refY="1.5625">
+                <path d="M0,0 L3.125,1.5625 L0,3.125 Z" fill="#ef476f" />
               </marker>
             </defs>
             {arrows.map((arrow) => {
@@ -110,6 +242,20 @@ export function ChessBoard({
               );
             })}
           </svg>
+          {dragState?.kind === "piece" ? (
+            <span
+              className="dragging-piece"
+              style={
+                {
+                  "--drag-x": `${dragState.x}px`,
+                  "--drag-y": `${dragState.y}px`,
+                  "--board-size": `${boardSize}px`,
+                } as CSSProperties
+              }
+            >
+              {PIECES[dragState.piece]}
+            </span>
+          ) : null}
         </div>
         <div className="file-coordinates" aria-hidden="true">
           {FILES.map((file) => (
@@ -124,6 +270,102 @@ export function ChessBoard({
       </div>
     </div>
   );
+}
+
+function handlePointerStart({
+  chess,
+  event,
+  legalMoves,
+  onMove,
+  onSelectFrom,
+  onClear,
+  onPieceDrag,
+  piece,
+  square,
+}: {
+  chess: Chess;
+  event: React.PointerEvent<HTMLButtonElement>;
+  legalMoves: Move[];
+  onMove?: (move: BoardMove) => void;
+  onSelectFrom: (from: string, moves: Move[]) => void;
+  onClear: () => void;
+  onPieceDrag: (state: {
+    kind: "piece";
+    from: string;
+    piece: string;
+    moves: Move[];
+    x: number;
+    y: number;
+  }) => void;
+  piece?: string;
+  square: string;
+}) {
+  const pendingMove = findPreferredMove(legalMoves, square);
+
+  if (pendingMove) {
+    onMove?.({
+      from: pendingMove.from,
+      to: pendingMove.to,
+      promotion: pendingMove.promotion,
+      san: pendingMove.san,
+    });
+    onClear();
+    return;
+  }
+
+  const moves = getLegalMovesFromSquare(chess, square);
+
+  if (piece && moves.length > 0) {
+    onSelectFrom(square, moves);
+    onPieceDrag({
+      kind: "piece",
+      from: square,
+      piece,
+      moves,
+      x: event.clientX,
+      y: event.clientY,
+    });
+    return;
+  }
+
+  onClear();
+}
+
+function getLegalMovesFromSquare(chess: Chess, square: string) {
+  if (!isSquare(square)) {
+    return [];
+  }
+
+  return chess.moves({
+    square,
+    verbose: true,
+  });
+}
+
+function findPreferredMove(moves: Move[], targetSquare: string | null) {
+  if (!targetSquare) {
+    return undefined;
+  }
+
+  const targetMoves = moves.filter((move) => move.to === targetSquare);
+
+  return targetMoves.find((move) => move.promotion === "q") ?? targetMoves.find((move) => !move.promotion) ?? targetMoves[0];
+}
+
+function clearMoveSelection(setSelectedFrom: (square: string) => void, setLegalMoves: (moves: Move[]) => void) {
+  setSelectedFrom("");
+  setLegalMoves([]);
+}
+
+function getSquareFromPoint(x: number, y: number) {
+  const target = document.elementFromPoint(x, y);
+  const squareElement = target instanceof HTMLElement ? target.closest<HTMLElement>("[data-square]") : null;
+
+  return squareElement?.dataset.square ?? null;
+}
+
+function isSquare(square: string): square is Square {
+  return /^[a-h][1-8]$/.test(square);
 }
 
 function parseFenPieces(fen: string) {
