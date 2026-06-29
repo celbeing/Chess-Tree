@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Eye, EyeOff, GitBranch, Plus, RotateCcw, Trash2, Upload, Zap } from "lucide-react";
+import type { CSSProperties } from "react";
+import { Copy, Eye, EyeOff, Pencil, RotateCcw, Upload, Zap } from "lucide-react";
 import { ChessBoard, type BoardMove } from "@/components/ChessBoard";
 import { TreeCanvas } from "@/components/TreeCanvas";
 import { usePersistentGameTree } from "@/hooks/usePersistentGameTree";
@@ -9,7 +10,6 @@ import {
   addArrow,
   addSanMove,
   addSquareMark,
-  clearBoardAnnotations,
   createInitialTree,
   createTreeFromNotation,
   deleteSubtree,
@@ -29,13 +29,14 @@ export function ChessTreeApp() {
   const { tree, setTree, resetTree, loaded } = usePersistentGameTree();
   const selectedNode = getSelectedNode(tree);
   const [notationInput, setNotationInput] = useState(SAMPLE_LINE);
-  const [sanInput, setSanInput] = useState("");
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [error, setError] = useState("");
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(tree.title);
   const [boardVisible, setBoardVisible] = useState(true);
   const [boardSize, setBoardSize] = useState(380);
   const [selectedSquare, setSelectedSquare] = useState("");
-  const [arrowFrom, setArrowFrom] = useState("");
-  const [arrowTo, setArrowTo] = useState("");
+  const [fenCopyState, setFenCopyState] = useState<"idle" | "copied">("idle");
   const [engineDepth, setEngineDepth] = useState(12);
   const [engineState, setEngineState] = useState<"idle" | "running" | "error">("idle");
   const engineRef = useRef<StockfishBrowserEngine | null>(null);
@@ -45,6 +46,12 @@ export function ChessTreeApp() {
       engineRef.current?.dispose();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isEditingTitle) {
+      setTitleDraft(tree.title);
+    }
+  }, [isEditingTitle, tree.title]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -79,19 +86,29 @@ export function ChessTreeApp() {
     try {
       setError("");
       resetTree(createTreeFromNotation(notationInput));
+      setImportDialogOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not import notation.");
     }
   }
 
-  function handleAddMove() {
+  function handleTitleCommit() {
+    const nextTitle = titleDraft.trim() || "Untitled analysis";
+
+    setTree((current) => updateTitle(current, nextTitle));
+    setTitleDraft(nextTitle);
+    setIsEditingTitle(false);
+  }
+
+  async function handleCopyFen() {
     try {
       setError("");
-      const result = addSanMove(tree, selectedNode.id, sanInput);
-      setTree(result.tree);
-      setSanInput("");
+      await navigator.clipboard.writeText(selectedNode.fen);
+      setFenCopyState("copied");
+      window.setTimeout(() => setFenCopyState("idle"), 1400);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not add move.");
+      setFenCopyState("idle");
+      setError(caught instanceof Error ? caught.message : "Could not copy FEN.");
     }
   }
 
@@ -136,105 +153,56 @@ export function ChessTreeApp() {
     setTree((current) => addArrow(current, selectedNode.id, from, to));
   }
 
-  function handleAddArrow() {
-    if (!arrowFrom || !arrowTo) {
-      return;
-    }
-
-    setTree((current) => addArrow(current, selectedNode.id, arrowFrom, arrowTo));
-    setArrowFrom("");
-    setArrowTo("");
-  }
-
   const engineLabel = engineState === "running" ? "Evaluating" : selectedNode.eval ? formatEngineScore(selectedNode.eval) : "Evaluate";
+  const analysisPanelWidth = Math.max(360, boardSize + 54);
 
   return (
     <main className="app-shell">
-      <section className="workspace">
-        <aside className="side-panel">
-          <div className="panel-block">
-            <label className="field-label" htmlFor="title">
-              Title
-            </label>
-            <input
-              className="text-input"
-              id="title"
-              onChange={(event) => setTree((current) => updateTitle(current, event.target.value))}
-              value={tree.title}
-            />
-          </div>
-
-          <div className="panel-block">
-            <label className="field-label" htmlFor="notation">
-              PGN / SAN
-            </label>
-            <textarea
-              className="textarea"
-              id="notation"
-              onChange={(event) => setNotationInput(event.target.value)}
-              rows={7}
-              value={notationInput}
-            />
-            <button className="primary-button" onClick={handleImport} type="button">
-              <Upload size={16} />
-              Import
-            </button>
-          </div>
-
-          <div className="panel-block">
-            <label className="field-label" htmlFor="san">
-              Branch from {formatMoveLabel(selectedNode)}
-            </label>
-            <div className="inline-row">
-              <input
-                className="text-input"
-                id="san"
-                onChange={(event) => setSanInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    handleAddMove();
-                  }
-                }}
-                placeholder="Nf3"
-                value={sanInput}
-              />
-              <button className="icon-button" onClick={handleAddMove} title="Add move" type="button">
-                <Plus size={17} />
-              </button>
-            </div>
-          </div>
-
-          <div className="panel-block">
-            <label className="field-label" htmlFor="caption">
-              Caption
-            </label>
-            <textarea
-              className="textarea"
-              id="caption"
-              onChange={(event) => setTree((current) => updateCaption(current, selectedNode.id, event.target.value))}
-              rows={4}
-              value={selectedNode.caption}
-            />
-          </div>
-
-          <div className="button-row">
-            <button className="secondary-button" onClick={() => resetTree(createInitialTree())} type="button">
-              <RotateCcw size={16} />
-              Reset
-            </button>
-            <span className="save-state">{loaded ? "Saved" : "Loading"}</span>
-          </div>
-
-          {error ? <p className="error-text">{error}</p> : null}
-        </aside>
-
+      <section
+        className="workspace"
+        style={{ "--analysis-panel-width": `${analysisPanelWidth}px` } as CSSProperties}
+      >
         <section className="tree-panel">
           <header className="tree-header">
-            <div>
-              <h1>{tree.title}</h1>
-              <p>{Object.keys(tree.nodes).length} nodes</p>
+            <div className="tree-title-block">
+              <div className="title-row">
+                {isEditingTitle ? (
+                  <input
+                    aria-label="Title"
+                    autoFocus
+                    className="title-input"
+                    onBlur={handleTitleCommit}
+                    onChange={(event) => setTitleDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        handleTitleCommit();
+                      }
+                    }}
+                    value={titleDraft}
+                  />
+                ) : (
+                  <h1>{tree.title}</h1>
+                )}
+                <button
+                  className="icon-button title-edit-button"
+                  onClick={() => {
+                    setTitleDraft(tree.title);
+                    setIsEditingTitle(true);
+                  }}
+                  title="Edit title"
+                  type="button"
+                >
+                  <Pencil size={16} />
+                </button>
+              </div>
+              <p>
+                {Object.keys(tree.nodes).length} nodes | {loaded ? "Saved" : "Loading"}
+              </p>
             </div>
-            <GitBranch size={20} />
+            <button className="secondary-button import-button" onClick={() => setImportDialogOpen(true)} type="button">
+              <Upload size={16} />
+              Import PGN
+            </button>
           </header>
           <TreeCanvas tree={tree} onSelectNode={(nodeId) => setTree((current) => selectNode(current, nodeId))} />
         </section>
@@ -272,44 +240,32 @@ export function ChessTreeApp() {
             />
           ) : null}
 
-          <div className="node-summary">
-            <h2>{formatMoveLabel(selectedNode)}</h2>
-            {selectedNode.ecoCode && selectedNode.openingName ? (
-              <p>
-                {selectedNode.ecoCode} {selectedNode.openingName}
-              </p>
-            ) : null}
-            <code>{selectedNode.fen}</code>
+          <div className="node-summary node-summary-header">
+            <div>
+              <h2>{formatMoveLabel(selectedNode)}</h2>
+              {selectedNode.ecoCode && selectedNode.openingName ? (
+                <p>
+                  {selectedNode.ecoCode} {selectedNode.openingName}
+                </p>
+              ) : null}
+            </div>
+            <button className="secondary-button fen-copy-button" onClick={handleCopyFen} type="button">
+              <Copy size={16} />
+              {fenCopyState === "copied" ? "Copied" : "Paste FEN"}
+            </button>
           </div>
 
-          <div className="panel-block compact">
-            <div className="inline-row">
-              <input
-                className="text-input"
-                maxLength={2}
-                onChange={(event) => setArrowFrom(event.target.value)}
-                placeholder="e2"
-                value={arrowFrom}
-              />
-              <input
-                className="text-input"
-                maxLength={2}
-                onChange={(event) => setArrowTo(event.target.value)}
-                placeholder="e4"
-                value={arrowTo}
-              />
-              <button className="icon-button" onClick={handleAddArrow} title="Add arrow" type="button">
-                <Plus size={17} />
-              </button>
-              <button
-                className="icon-button danger"
-                onClick={() => setTree((current) => clearBoardAnnotations(current, selectedNode.id))}
-                title="Clear annotations"
-                type="button"
-              >
-                <Trash2 size={17} />
-              </button>
-            </div>
+          <div className="panel-block">
+            <label className="field-label" htmlFor="caption">
+              Caption
+            </label>
+            <textarea
+              className="textarea"
+              id="caption"
+              onChange={(event) => setTree((current) => updateCaption(current, selectedNode.id, event.target.value))}
+              rows={4}
+              value={selectedNode.caption}
+            />
           </div>
 
           <div className="engine-panel">
@@ -327,7 +283,7 @@ export function ChessTreeApp() {
             </label>
             <button
               className="primary-button"
-              disabled={engineState === "running"}
+              disabled
               onClick={handleEvaluate}
               type="button"
             >
@@ -335,8 +291,44 @@ export function ChessTreeApp() {
               {engineLabel}
             </button>
           </div>
+
+          <div className="analysis-panel-footer">
+            <button className="secondary-button" onClick={() => resetTree(createInitialTree())} type="button">
+              <RotateCcw size={16} />
+              Reset
+            </button>
+          </div>
+
+          {error ? <p className="error-text">{error}</p> : null}
         </aside>
       </section>
+
+      {importDialogOpen ? (
+        <div className="modal-backdrop">
+          <section aria-labelledby="import-pgn-title" aria-modal="true" className="modal-panel" role="dialog">
+            <header className="modal-header">
+              <h2 id="import-pgn-title">Import PGN</h2>
+            </header>
+            <textarea
+              autoFocus
+              className="textarea import-textarea"
+              id="notation"
+              onChange={(event) => setNotationInput(event.target.value)}
+              rows={10}
+              value={notationInput}
+            />
+            <div className="modal-actions">
+              <button className="secondary-button" onClick={() => setImportDialogOpen(false)} type="button">
+                Cancel
+              </button>
+              <button className="primary-button" onClick={handleImport} type="button">
+                <Upload size={16} />
+                Import
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
