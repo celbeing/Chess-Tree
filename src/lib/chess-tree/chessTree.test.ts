@@ -9,7 +9,13 @@ import {
   deleteSubtree,
   formatMoveLabel,
   formatSegmentLabel,
+  getNextMoveNavigation,
+  getPreviousMoveNodeId,
+  getSegmentCaptionNodeId,
+  getSegmentEndNodeId,
+  getTopMoveNodeId,
   parseMainLineNotation,
+  splitNodeBefore,
   updateCaption,
 } from "./chessTree";
 
@@ -117,6 +123,97 @@ describe("chess tree", () => {
       "Bc4",
     ]);
     expect(formatSegmentLabel(tree, nonRootSegments[0])).toBe("1. e4 ... 3. Bc4");
+  });
+
+  it("can split a straight compressed line into separate captionable tree nodes", () => {
+    let tree = createTreeFromNotation("1. e4 e5 2. Nf3 Nc6 3. d4 exd4 4. Nxd4 Bc5", {
+      idFactory: createSequentialIdFactory("split"),
+      now: () => "now",
+    });
+    const d4NodeId = Object.values(tree.nodes).find((node) => node.san === "d4")?.id as string;
+
+    tree = splitNodeBefore(tree, d4NodeId, () => "split-now");
+
+    const layout = buildCompressedTreeLayout(tree);
+    const nonRootSegments = Object.values(layout.segments).filter((segment) => segment.id !== layout.rootSegmentId);
+
+    expect(nonRootSegments).toHaveLength(2);
+    expect(nonRootSegments[0].nodeIds.map((nodeId) => tree.nodes[nodeId].san)).toEqual([
+      "e4",
+      "e5",
+      "Nf3",
+      "Nc6",
+    ]);
+    expect(nonRootSegments[1].nodeIds.map((nodeId) => tree.nodes[nodeId].san)).toEqual([
+      "d4",
+      "exd4",
+      "Nxd4",
+      "Bc5",
+    ]);
+    expect(formatSegmentLabel(tree, nonRootSegments[0])).toBe("1. e4 ... 2... Nc6");
+    expect(formatSegmentLabel(tree, nonRootSegments[1])).toBe("3. d4 ... 4... Bc5");
+
+    const captionNodeId = getSegmentCaptionNodeId(tree, d4NodeId);
+    const updated = updateCaption(tree, captionNodeId, "Scotch structure", () => "caption-now");
+
+    expect(captionNodeId).toBe(nonRootSegments[1].nodeIds[nonRootSegments[1].nodeIds.length - 1]);
+    expect(updated.nodes[d4NodeId].caption).toBe("");
+    expect(updated.nodes[captionNodeId].caption).toBe("Scotch structure");
+  });
+
+  it("navigates moves inside and across compressed tree nodes", () => {
+    let tree = createTreeFromNotation("1. e4 e5 2. Nf3 Nc6 3. d4 exd4 4. Nxd4 Bc5", {
+      idFactory: createSequentialIdFactory("nav"),
+      now: () => "now",
+    });
+    const e4NodeId = Object.values(tree.nodes).find((node) => node.san === "e4")?.id as string;
+    const nc6NodeId = Object.values(tree.nodes).find((node) => node.san === "Nc6")?.id as string;
+    const d4NodeId = Object.values(tree.nodes).find((node) => node.san === "d4")?.id as string;
+    const exd4NodeId = Object.values(tree.nodes).find((node) => node.san === "exd4")?.id as string;
+    const bc5NodeId = Object.values(tree.nodes).find((node) => node.san === "Bc5")?.id as string;
+
+    tree = splitNodeBefore(tree, d4NodeId, () => "split-now");
+
+    const nextFromNc6 = getNextMoveNavigation(tree, nc6NodeId);
+    const nextFromD4 = getNextMoveNavigation(tree, d4NodeId);
+
+    expect(getTopMoveNodeId(tree)).toBe(e4NodeId);
+    expect(getSegmentEndNodeId(tree, e4NodeId)).toBe(nc6NodeId);
+    expect(getSegmentEndNodeId(tree, d4NodeId)).toBe(bc5NodeId);
+    expect(getPreviousMoveNodeId(tree, d4NodeId)).toBe(nc6NodeId);
+    expect(getPreviousMoveNodeId(tree, exd4NodeId)).toBe(d4NodeId);
+    expect(nextFromNc6).toEqual({
+      kind: "node",
+      nodeId: d4NodeId,
+    });
+    expect(nextFromD4).toEqual({
+      kind: "node",
+      nodeId: exd4NodeId,
+    });
+  });
+
+  it("returns next-move choices at a tree node with multiple children", () => {
+    const idFactory = createSequentialIdFactory("choice");
+    let tree = createTreeFromNotation("1. e4 e5 2. Nf3 Nc6 3. Bc4", {
+      idFactory,
+      now: () => "now",
+    });
+    const bc4NodeId = tree.selectedNodeId;
+    let result = addSanMove(tree, bc4NodeId, "Nf6", { idFactory, now: () => "now" });
+    tree = result.tree;
+    result = addSanMove(tree, bc4NodeId, "Bc5", { idFactory, now: () => "now" });
+    tree = result.tree;
+
+    const nextFromBc4 = getNextMoveNavigation(tree, bc4NodeId);
+
+    expect(nextFromBc4.kind).toBe("choices");
+
+    if (nextFromBc4.kind !== "choices") {
+      throw new Error("Expected choices navigation target.");
+    }
+
+    expect(nextFromBc4.choices.map((choice) => choice.label)).toEqual(["3... Nf6", "3... Bc5"]);
+    expect(nextFromBc4.choices.map((choice) => tree.nodes[choice.nodeId].san)).toEqual(["Nf6", "Bc5"]);
   });
 
   it("keeps the common line compressed and splits child segments at the branch point", () => {

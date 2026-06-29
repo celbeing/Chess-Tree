@@ -172,7 +172,8 @@ button:disabled {
 }
 
 .text-input,
-.textarea {
+.textarea,
+.select-input {
   background: #fbfcfe;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -189,7 +190,8 @@ button:disabled {
 }
 
 .text-input:focus,
-.textarea:focus {
+.textarea:focus,
+.select-input:focus {
   border-color: var(--focus);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14);
 }
@@ -605,6 +607,11 @@ button:disabled {
   justify-content: space-between;
 }
 
+.node-action-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .node-summary code {
   background: #f1f4f8;
   border: 1px solid var(--border);
@@ -664,6 +671,10 @@ button:disabled {
   max-width: 680px;
   padding: 16px;
   width: min(100%, 680px);
+}
+
+.move-choice-panel {
+  max-width: 420px;
 }
 
 .modal-header {

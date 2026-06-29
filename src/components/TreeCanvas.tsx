@@ -69,7 +69,7 @@ export function TreeCanvas({ tree, onSelectNode }: TreeCanvasProps) {
           const selected = segment.nodeIds.includes(tree.selectedNodeId);
           const expanded = expandedSegmentIds.has(segment.id);
           const lastNode = tree.nodes[segment.nodeIds[segment.nodeIds.length - 1]];
-          const infoNode = selected ? tree.nodes[tree.selectedNodeId] : lastNode;
+          const infoNode = lastNode;
 
           if (!lastNode || !infoNode) {
             return null;

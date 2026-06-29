@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Copy, Eye, EyeOff, Pencil, RotateCcw, Upload, Zap } from "lucide-react";
+import { Copy, Eye, EyeOff, Pencil, RotateCcw, Scissors, Upload, Zap } from "lucide-react";
 import { ChessBoard, type BoardMove } from "@/components/ChessBoard";
 import { TreeCanvas } from "@/components/TreeCanvas";
 import { usePersistentGameTree } from "@/hooks/usePersistentGameTree";
@@ -15,9 +15,18 @@ import {
   deleteSubtree,
   formatEngineScore,
   formatMoveLabel,
+  getCompressedSegmentForNode,
+  getNextMoveNavigation,
+  getPreviousMoveNodeId,
+  getSegmentCaptionNodeId,
+  getSegmentEndNodeId,
   getSelectedNode,
+  getTopMoveNodeId,
   selectNode,
   setNodeEval,
+  splitNodeBefore,
+  type MoveNavigationChoice,
+  type MoveNavigationTarget,
   updateCaption,
   updateTitle,
 } from "@/lib/chess-tree/chessTree";
@@ -37,6 +46,10 @@ export function ChessTreeApp() {
   const [boardSize, setBoardSize] = useState(380);
   const [selectedSquare, setSelectedSquare] = useState("");
   const [fenCopyState, setFenCopyState] = useState<"idle" | "copied">("idle");
+  const [nextMoveDialog, setNextMoveDialog] = useState<{
+    choices: MoveNavigationChoice[];
+    selectedNodeId: string;
+  } | null>(null);
   const [engineDepth, setEngineDepth] = useState(12);
   const [engineState, setEngineState] = useState<"idle" | "running" | "error">("idle");
   const engineRef = useRef<StockfishBrowserEngine | null>(null);
@@ -55,12 +68,51 @@ export function ChessTreeApp() {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      const target = event.target;
-      const tagName = target instanceof HTMLElement ? target.tagName : "";
-      const isEditingText =
-        tagName === "INPUT" || tagName === "TEXTAREA" || (target instanceof HTMLElement && target.isContentEditable);
+      const isEditingText = isTextEditingTarget(event.target);
+
+      if (nextMoveDialog && event.key === "Escape") {
+        setNextMoveDialog(null);
+
+        return;
+      }
+
+      if (importDialogOpen || nextMoveDialog) {
+        return;
+      }
 
       if (event.key !== "Delete" || isEditingText || selectedNode.id === tree.rootId) {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+          return;
+        }
+
+        if (isEditingText || importDialogOpen || nextMoveDialog || event.altKey || event.metaKey) {
+          return;
+        }
+
+        event.preventDefault();
+
+        if (event.key === "ArrowLeft") {
+          const previousNodeId = event.ctrlKey ? getTopMoveNodeId(tree) : getPreviousMoveNodeId(tree, selectedNode.id);
+
+          if (previousNodeId) {
+            setTree((current) => selectNode(current, previousNodeId));
+          }
+
+          return;
+        }
+
+        if (event.ctrlKey) {
+          const segmentEndNodeId = getSegmentEndNodeId(tree, selectedNode.id);
+
+          if (segmentEndNodeId !== selectedNode.id) {
+            setTree((current) => selectNode(current, segmentEndNodeId));
+
+            return;
+          }
+        }
+
+        handleMoveNavigationTarget(getNextMoveNavigation(tree, selectedNode.id));
+
         return;
       }
 
@@ -80,7 +132,7 @@ export function ChessTreeApp() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [selectedNode, setTree, tree.rootId]);
+  }, [handleMoveNavigationTarget, importDialogOpen, nextMoveDialog, selectedNode, setTree, tree]);
 
   function handleImport() {
     try {
@@ -153,8 +205,53 @@ export function ChessTreeApp() {
     setTree((current) => addArrow(current, selectedNode.id, from, to));
   }
 
+  function handleSplitBeforeSelectedNode() {
+    setError("");
+    setTree((current) => splitNodeBefore(current, current.selectedNodeId));
+  }
+
+  function handleMoveNavigationTarget(target: MoveNavigationTarget) {
+    if (target.kind === "none") {
+      return;
+    }
+
+    if (target.kind === "node") {
+      setNextMoveDialog(null);
+      setTree((current) => selectNode(current, target.nodeId));
+
+      return;
+    }
+
+    if (target.choices.length === 1) {
+      setNextMoveDialog(null);
+      setTree((current) => selectNode(current, target.choices[0].nodeId));
+
+      return;
+    }
+
+    if (target.choices.length > 1) {
+      setNextMoveDialog({
+        choices: target.choices,
+        selectedNodeId: target.choices[0].nodeId,
+      });
+    }
+  }
+
+  function handleChooseNextMove() {
+    if (!nextMoveDialog) {
+      return;
+    }
+
+    setTree((current) => selectNode(current, nextMoveDialog.selectedNodeId));
+    setNextMoveDialog(null);
+  }
+
   const engineLabel = engineState === "running" ? "Evaluating" : selectedNode.eval ? formatEngineScore(selectedNode.eval) : "Evaluate";
   const analysisPanelWidth = Math.max(360, boardSize + 54);
+  const selectedSegment = getCompressedSegmentForNode(tree, selectedNode.id);
+  const segmentCaptionNodeId = getSegmentCaptionNodeId(tree, selectedNode.id);
+  const segmentCaptionNode = tree.nodes[segmentCaptionNodeId] ?? selectedNode;
+  const canSplitSelectedNode = selectedNode.id !== tree.rootId && selectedSegment?.nodeIds[0] !== selectedNode.id;
 
   return (
     <main className="app-shell">
@@ -255,16 +352,37 @@ export function ChessTreeApp() {
             </button>
           </div>
 
+          <div className="node-action-row">
+            <button
+              className="secondary-button"
+              disabled={!canSplitSelectedNode}
+              onClick={handleSplitBeforeSelectedNode}
+              title="Start a separate tree node at the selected move"
+              type="button"
+            >
+              <Scissors size={16} />
+              Split node
+            </button>
+          </div>
+
           <div className="panel-block">
             <label className="field-label" htmlFor="caption">
-              Caption
+              Node caption
             </label>
             <textarea
               className="textarea"
               id="caption"
-              onChange={(event) => setTree((current) => updateCaption(current, selectedNode.id, event.target.value))}
+              onChange={(event) => {
+                const caption = event.target.value;
+
+                setTree((current) => {
+                  const captionNodeId = getSegmentCaptionNodeId(current, current.selectedNodeId);
+
+                  return updateCaption(current, captionNodeId, caption);
+                });
+              }}
               rows={4}
-              value={selectedNode.caption}
+              value={segmentCaptionNode.caption}
             />
           </div>
 
@@ -329,6 +447,65 @@ export function ChessTreeApp() {
           </section>
         </div>
       ) : null}
+
+      {nextMoveDialog ? (
+        <div className="modal-backdrop">
+          <section
+            aria-labelledby="next-move-title"
+            aria-modal="true"
+            className="modal-panel move-choice-panel"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setNextMoveDialog(null);
+              }
+
+              if (event.key === "Enter") {
+                event.preventDefault();
+                handleChooseNextMove();
+              }
+            }}
+            role="dialog"
+          >
+            <header className="modal-header">
+              <h2 id="next-move-title">Choose next move</h2>
+            </header>
+            <label className="field-label" htmlFor="next-move-choice">
+              Next move
+            </label>
+            <select
+              autoFocus
+              className="select-input"
+              id="next-move-choice"
+              onChange={(event) => setNextMoveDialog({
+                choices: nextMoveDialog.choices,
+                selectedNodeId: event.target.value,
+              })}
+              value={nextMoveDialog.selectedNodeId}
+            >
+              {nextMoveDialog.choices.map((choice) => (
+                <option key={choice.nodeId} value={choice.nodeId}>
+                  {choice.label}
+                </option>
+              ))}
+            </select>
+            <div className="modal-actions">
+              <button className="secondary-button" onClick={() => setNextMoveDialog(null)} type="button">
+                Cancel
+              </button>
+              <button className="primary-button" onClick={handleChooseNextMove} type="button">
+                Move
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
+}
+
+function isTextEditingTarget(target: EventTarget | null) {
+  const element = target instanceof HTMLElement ? target : null;
+  const tagName = element?.tagName;
+
+  return tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT" || Boolean(element?.isContentEditable);
 }

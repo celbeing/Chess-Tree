@@ -36,6 +36,7 @@ export type MoveNode = {
   uci: string;
   fen: string;
   caption: string;
+  splitBefore?: boolean;
   ecoCode?: string;
   openingName?: string;
   eval?: EngineScore;

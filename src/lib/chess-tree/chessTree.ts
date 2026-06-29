@@ -26,6 +26,24 @@ type ParsedMoveResult = {
   nodeId: NodeId;
 };
 
+export type MoveNavigationChoice = {
+  nodeId: NodeId;
+  label: string;
+};
+
+export type MoveNavigationTarget =
+  | {
+      kind: "none";
+    }
+  | {
+      kind: "node";
+      nodeId: NodeId;
+    }
+  | {
+      kind: "choices";
+      choices: MoveNavigationChoice[];
+    };
+
 const RESULT_TOKENS = new Set(["1-0", "0-1", "1/2-1/2", "*"]);
 
 export function createDefaultIdFactory() {
@@ -176,6 +194,19 @@ export function updateCaption(tree: GameTree, nodeId: NodeId, caption: string, n
         caption,
       },
     },
+  }, now);
+}
+
+export function splitNodeBefore(tree: GameTree, nodeId: NodeId, now?: () => string): GameTree {
+  const node = tree.nodes[nodeId];
+
+  if (!node || node.parentId === null || node.splitBefore) {
+    return tree;
+  }
+
+  return replaceNode(tree, {
+    ...node,
+    splitBefore: true,
   }, now);
 }
 
@@ -378,7 +409,13 @@ export function buildCompressedTreeLayout(tree: GameTree): CompressedTreeLayout 
         break;
       }
 
-      current = tree.nodes[current.childrenIds[0]];
+      const child = tree.nodes[current.childrenIds[0]];
+
+      if (!child || child.splitBefore) {
+        break;
+      }
+
+      current = child;
     }
 
     const firstNode = tree.nodes[nodeIds[0]];
@@ -497,6 +534,109 @@ export function formatSegmentLabel(tree: GameTree, segment: CompressedTreeSegmen
   return `${formatMoveLabel(firstNode)} ... ${formatMoveLabel(lastNode)}`;
 }
 
+export function getCompressedSegmentForNode(tree: GameTree, nodeId: NodeId): CompressedTreeSegment | undefined {
+  const layout = buildCompressedTreeLayout(tree);
+
+  return Object.values(layout.segments).find((segment) => segment.nodeIds.includes(nodeId));
+}
+
+export function getSegmentCaptionNodeId(tree: GameTree, nodeId: NodeId): NodeId {
+  const segment = getCompressedSegmentForNode(tree, nodeId);
+
+  return segment?.nodeIds[segment.nodeIds.length - 1] ?? nodeId;
+}
+
+export function getPreviousMoveNodeId(tree: GameTree, nodeId: NodeId): NodeId | null {
+  const context = getCompressedSegmentContext(tree, nodeId);
+
+  if (!context) {
+    return null;
+  }
+
+  const { layout, segment, nodeIndex } = context;
+
+  if (nodeIndex > 0) {
+    return segment.nodeIds[nodeIndex - 1];
+  }
+
+  if (!segment.parentSegmentId) {
+    return null;
+  }
+
+  const parentSegment = layout.segments[segment.parentSegmentId];
+
+  return parentSegment?.nodeIds[parentSegment.nodeIds.length - 1] ?? null;
+}
+
+export function getNextMoveNavigation(tree: GameTree, nodeId: NodeId): MoveNavigationTarget {
+  const context = getCompressedSegmentContext(tree, nodeId);
+
+  if (!context) {
+    return {
+      kind: "none",
+    };
+  }
+
+  const { layout, segment, nodeIndex } = context;
+
+  if (nodeIndex < segment.nodeIds.length - 1) {
+    return {
+      kind: "node",
+      nodeId: segment.nodeIds[nodeIndex + 1],
+    };
+  }
+
+  if (segment.childSegmentIds.length === 0) {
+    return {
+      kind: "none",
+    };
+  }
+
+  if (segment.childSegmentIds.length === 1) {
+    const childSegment = layout.segments[segment.childSegmentIds[0]];
+
+    return childSegment
+      ? {
+          kind: "node",
+          nodeId: childSegment.nodeIds[0],
+        }
+      : {
+          kind: "none",
+        };
+  }
+
+  return {
+    kind: "choices",
+    choices: segment.childSegmentIds
+      .map((segmentId) => layout.segments[segmentId])
+      .filter(Boolean)
+      .map((childSegment) => ({
+        nodeId: childSegment.nodeIds[0],
+        label: formatSegmentLabel(tree, childSegment),
+      })),
+  };
+}
+
+export function getTopMoveNodeId(tree: GameTree): NodeId {
+  const layout = buildCompressedTreeLayout(tree);
+  const rootSegment = layout.segments[layout.rootSegmentId];
+  const firstChildSegment = rootSegment?.childSegmentIds
+    .map((segmentId) => layout.segments[segmentId])
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftPosition = layout.positions[left.id];
+      const rightPosition = layout.positions[right.id];
+
+      return (leftPosition?.row ?? 0) - (rightPosition?.row ?? 0);
+    })[0];
+
+  return firstChildSegment?.nodeIds[0] ?? tree.rootId;
+}
+
+export function getSegmentEndNodeId(tree: GameTree, nodeId: NodeId): NodeId {
+  return getSegmentCaptionNodeId(tree, nodeId);
+}
+
 export function getSelectedNode(tree: GameTree): MoveNode {
   return tree.nodes[tree.selectedNodeId] ?? tree.nodes[tree.rootId];
 }
@@ -585,6 +725,21 @@ function replaceNode(tree: GameTree, node: MoveNode, now?: () => string): GameTr
       [node.id]: node,
     },
   }, now);
+}
+
+function getCompressedSegmentContext(tree: GameTree, nodeId: NodeId) {
+  const layout = buildCompressedTreeLayout(tree);
+  const segment = Object.values(layout.segments).find((candidate) => candidate.nodeIds.includes(nodeId));
+
+  if (!segment) {
+    return null;
+  }
+
+  return {
+    layout,
+    segment,
+    nodeIndex: segment.nodeIds.indexOf(nodeId),
+  };
 }
 
 function collectSubtreeNodeIds(tree: GameTree, nodeId: NodeId): Set<NodeId> {
