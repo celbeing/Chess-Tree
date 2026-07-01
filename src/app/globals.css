@@ -32,6 +32,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -144,6 +145,37 @@ button:disabled {
 
 .import-button {
   flex: 0 0 auto;
+}
+
+.header-actions,
+.server-controls {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.header-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.server-controls {
+  flex-wrap: wrap;
+}
+
+.account-label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-select {
+  min-width: 180px;
+  width: 220px;
 }
 
 .tree-header p,
@@ -724,7 +756,9 @@ button:disabled {
 
   .inline-row,
   .board-toolbar,
-  .engine-panel {
+  .engine-panel,
+  .header-actions,
+  .server-controls {
     align-items: stretch;
     flex-wrap: wrap;
   }

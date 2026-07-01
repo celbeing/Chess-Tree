@@ -65,7 +65,7 @@ export function createInitialTree(options: TreeOptions = {}): GameTree {
     parentId: null,
     childrenIds: [],
     ply: 0,
-    san: "Start",
+    san: "시작",
     uci: "",
     fen: START_FEN,
     caption: "",
@@ -80,7 +80,7 @@ export function createInitialTree(options: TreeOptions = {}): GameTree {
     nodes: {
       [rootId]: root,
     },
-    title: "Untitled analysis",
+    title: "제목 없는 분석",
     updatedAt: now,
   };
 }
@@ -112,14 +112,14 @@ export function addSanMove(tree: GameTree, parentId: NodeId, san: string, option
   const parent = tree.nodes[parentId];
 
   if (!parent) {
-    throw new Error(`Unknown parent node: ${parentId}`);
+    throw new Error(`알 수 없는 상위 노드입니다: ${parentId}`);
   }
 
   const chess = new Chess(parent.fen);
   const move = chess.move(cleanSanToken(san), { strict: false });
 
   if (!move) {
-    throw new Error(`Illegal SAN move "${san}" from selected position.`);
+    throw new Error(`선택한 포지션에서 둘 수 없는 SAN 수입니다: "${san}"`);
   }
 
   const uci = `${move.from}${move.to}${move.promotion ?? ""}`;
@@ -643,7 +643,7 @@ export function getSelectedNode(tree: GameTree): MoveNode {
 
 export function formatMoveLabel(node: MoveNode): string {
   if (node.ply === 0) {
-    return "Start";
+    return "시작";
   }
 
   const moveNumber = Math.ceil(node.ply / 2);

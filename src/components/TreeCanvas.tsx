@@ -99,7 +99,7 @@ export function TreeCanvas({ tree, onSelectNode }: TreeCanvasProps) {
                 <button
                   className="tree-node-expand"
                   onClick={() => toggleSegment(expandedSegmentIds, setExpandedSegmentIds, segment.id)}
-                  title={expanded ? "Hide moves and board" : "Show moves and board"}
+                  title={expanded ? "수와 보드 숨기기" : "수와 보드 보이기"}
                   type="button"
                 >
                   {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
@@ -114,7 +114,7 @@ export function TreeCanvas({ tree, onSelectNode }: TreeCanvasProps) {
                           className={item.selected ? "tree-node-move ellipsis active" : "tree-node-move ellipsis"}
                           key="ellipsis"
                           onClick={() => toggleSegment(expandedSegmentIds, setExpandedSegmentIds, segment.id)}
-                          title="Show all moves"
+                          title="모든 수 보이기"
                           type="button"
                         >
                           ...

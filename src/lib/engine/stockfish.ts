@@ -100,7 +100,7 @@ export class StockfishBrowserEngine {
       this.handleLine(String(event.data));
     };
     this.worker.onerror = () => {
-      this.failAll(new Error("Stockfish worker failed to load."));
+      this.failAll(new Error("Stockfish worker를 불러올 수 없습니다."));
     };
   }
 

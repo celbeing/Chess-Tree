@@ -2,10 +2,24 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Copy, Eye, EyeOff, Pencil, RotateCcw, Scissors, Upload, Zap } from "lucide-react";
+import {
+  Copy,
+  Download,
+  Eye,
+  EyeOff,
+  FilePlus,
+  LogIn,
+  LogOut,
+  Pencil,
+  RotateCcw,
+  Save,
+  Scissors,
+  Upload,
+  Zap,
+} from "lucide-react";
 import { ChessBoard, type BoardMove } from "@/components/ChessBoard";
 import { TreeCanvas } from "@/components/TreeCanvas";
-import { usePersistentGameTree } from "@/hooks/usePersistentGameTree";
+import { useServerGameTree, type SaveStatus } from "@/hooks/useServerGameTree";
 import {
   addArrow,
   addSanMove,
@@ -35,7 +49,26 @@ import { StockfishBrowserEngine } from "@/lib/engine/stockfish";
 const SAMPLE_LINE = "1. e4 e5 2. Nf3 Nc6 3. Bc4";
 
 export function ChessTreeApp() {
-  const { tree, setTree, resetTree, loaded } = usePersistentGameTree();
+  const {
+    tree,
+    setTree,
+    resetTree,
+    loaded,
+    user,
+    analyses,
+    analysisToLoadId,
+    setAnalysisToLoadId,
+    currentAnalysisId,
+    dirty,
+    saveStatus,
+    serverError,
+    configError,
+    createNewAnalysis,
+    loadSelectedAnalysis,
+    saveCurrentAnalysis,
+    signIn,
+    signOut,
+  } = useServerGameTree();
   const selectedNode = getSelectedNode(tree);
   const [notationInput, setNotationInput] = useState(SAMPLE_LINE);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -118,7 +151,7 @@ export function ChessTreeApp() {
 
       event.preventDefault();
 
-      const confirmed = window.confirm(`Delete ${formatMoveLabel(selectedNode)} and all following moves?`);
+      const confirmed = window.confirm(`${formatMoveLabel(selectedNode)} 및 이후 모든 수를 삭제할까요?`);
 
       if (!confirmed) {
         return;
@@ -140,12 +173,12 @@ export function ChessTreeApp() {
       resetTree(createTreeFromNotation(notationInput));
       setImportDialogOpen(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not import notation.");
+      setError(caught instanceof Error ? caught.message : "기보를 불러올 수 없습니다.");
     }
   }
 
   function handleTitleCommit() {
-    const nextTitle = titleDraft.trim() || "Untitled analysis";
+    const nextTitle = titleDraft.trim() || "제목 없는 분석";
 
     setTree((current) => updateTitle(current, nextTitle));
     setTitleDraft(nextTitle);
@@ -160,7 +193,7 @@ export function ChessTreeApp() {
       window.setTimeout(() => setFenCopyState("idle"), 1400);
     } catch (caught) {
       setFenCopyState("idle");
-      setError(caught instanceof Error ? caught.message : "Could not copy FEN.");
+      setError(caught instanceof Error ? caught.message : "FEN을 복사할 수 없습니다.");
     }
   }
 
@@ -182,7 +215,7 @@ export function ChessTreeApp() {
       setEngineState("idle");
     } catch (caught) {
       setEngineState("error");
-      setError(caught instanceof Error ? caught.message : "Stockfish evaluation failed.");
+      setError(caught instanceof Error ? caught.message : "Stockfish 평가에 실패했습니다.");
     }
   }
 
@@ -197,7 +230,7 @@ export function ChessTreeApp() {
       const result = addSanMove(tree, selectedNode.id, move.san);
       setTree(result.tree);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not add board move.");
+      setError(caught instanceof Error ? caught.message : "보드 수를 추가할 수 없습니다.");
     }
   }
 
@@ -246,12 +279,21 @@ export function ChessTreeApp() {
     setNextMoveDialog(null);
   }
 
-  const engineLabel = engineState === "running" ? "Evaluating" : selectedNode.eval ? formatEngineScore(selectedNode.eval) : "Evaluate";
+  const engineLabel = engineState === "running" ? "평가 중" : selectedNode.eval ? formatEngineScore(selectedNode.eval) : "평가";
   const analysisPanelWidth = Math.max(360, boardSize + 54);
   const selectedSegment = getCompressedSegmentForNode(tree, selectedNode.id);
   const segmentCaptionNodeId = getSegmentCaptionNodeId(tree, selectedNode.id);
   const segmentCaptionNode = tree.nodes[segmentCaptionNodeId] ?? selectedNode;
   const canSplitSelectedNode = selectedNode.id !== tree.rootId && selectedSegment?.nodeIds[0] !== selectedNode.id;
+  const statusLabel = formatSaveStatus({
+    configError,
+    currentAnalysisId,
+    dirty,
+    loaded,
+    saveStatus,
+    signedIn: Boolean(user),
+  });
+  const visibleError = error || serverError;
 
   return (
     <main className="app-shell">
@@ -265,7 +307,7 @@ export function ChessTreeApp() {
               <div className="title-row">
                 {isEditingTitle ? (
                   <input
-                    aria-label="Title"
+                    aria-label="제목"
                     autoFocus
                     className="title-input"
                     onBlur={handleTitleCommit}
@@ -286,20 +328,83 @@ export function ChessTreeApp() {
                     setTitleDraft(tree.title);
                     setIsEditingTitle(true);
                   }}
-                  title="Edit title"
+                  title="제목 수정"
                   type="button"
                 >
                   <Pencil size={16} />
                 </button>
               </div>
               <p>
-                {Object.keys(tree.nodes).length} nodes | {loaded ? "Saved" : "Loading"}
+                {Object.keys(tree.nodes).length}개 노드 | {statusLabel}
               </p>
             </div>
-            <button className="secondary-button import-button" onClick={() => setImportDialogOpen(true)} type="button">
-              <Upload size={16} />
-              Import PGN
-            </button>
+            <div className="header-actions">
+              {user ? (
+                <div className="server-controls">
+                  <span className="account-label">{user.displayName || user.email || "로그인됨"}</span>
+                  <select
+                    className="select-input analysis-select"
+                    disabled={analyses.length === 0 || saveStatus === "loading" || saveStatus === "saving"}
+                    onChange={(event) => setAnalysisToLoadId(event.target.value)}
+                    value={analysisToLoadId}
+                  >
+                    {analyses.length > 0 ? (
+                      analyses.map((analysis) => (
+                        <option key={analysis.id} value={analysis.id}>
+                          {analysis.title}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">저장된 분석 없음</option>
+                    )}
+                  </select>
+                  <button
+                    className="secondary-button"
+                    disabled={!analysisToLoadId || saveStatus === "loading" || saveStatus === "saving"}
+                    onClick={loadSelectedAnalysis}
+                    type="button"
+                  >
+                    <Download size={16} />
+                    불러오기
+                  </button>
+                  <button
+                    className="secondary-button"
+                    disabled={saveStatus === "loading" || saveStatus === "saving"}
+                    onClick={createNewAnalysis}
+                    type="button"
+                  >
+                    <FilePlus size={16} />
+                    새 분석
+                  </button>
+                  <button
+                    className="primary-button"
+                    disabled={saveStatus === "loading" || saveStatus === "saving"}
+                    onClick={saveCurrentAnalysis}
+                    type="button"
+                  >
+                    <Save size={16} />
+                    저장
+                  </button>
+                  <button className="icon-button" onClick={signOut} title="로그아웃" type="button">
+                    <LogOut size={17} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="primary-button"
+                  disabled={!loaded || Boolean(configError)}
+                  onClick={signIn}
+                  type="button"
+                >
+                  <LogIn size={16} />
+                  로그인
+                </button>
+              )}
+              <button className="secondary-button import-button" onClick={() => setImportDialogOpen(true)} type="button">
+                <Upload size={16} />
+                PGN 불러오기
+              </button>
+            </div>
           </header>
           <TreeCanvas tree={tree} onSelectNode={(nodeId) => setTree((current) => selectNode(current, nodeId))} />
         </section>
@@ -308,10 +413,10 @@ export function ChessTreeApp() {
           <div className="board-toolbar">
             <button className="secondary-button" onClick={() => setBoardVisible((current) => !current)} type="button">
               {boardVisible ? <EyeOff size={16} /> : <Eye size={16} />}
-              {boardVisible ? "Hide" : "Show"}
+              {boardVisible ? "숨기기" : "보이기"}
             </button>
             <label className="range-field" htmlFor="board-size">
-              Size
+              크기
               <input
                 id="board-size"
                 max={560}
@@ -348,7 +453,7 @@ export function ChessTreeApp() {
             </div>
             <button className="secondary-button fen-copy-button" onClick={handleCopyFen} type="button">
               <Copy size={16} />
-              {fenCopyState === "copied" ? "Copied" : "Paste FEN"}
+              {fenCopyState === "copied" ? "복사됨" : "FEN 복사"}
             </button>
           </div>
 
@@ -357,17 +462,17 @@ export function ChessTreeApp() {
               className="secondary-button"
               disabled={!canSplitSelectedNode}
               onClick={handleSplitBeforeSelectedNode}
-              title="Start a separate tree node at the selected move"
+              title="선택한 수부터 별도 노드로 분리"
               type="button"
             >
               <Scissors size={16} />
-              Split node
+              노드 분리
             </button>
           </div>
 
           <div className="panel-block">
             <label className="field-label" htmlFor="caption">
-              Node caption
+              노드 캡션
             </label>
             <textarea
               className="textarea"
@@ -388,7 +493,7 @@ export function ChessTreeApp() {
 
           <div className="engine-panel">
             <label className="range-field" htmlFor="engine-depth">
-              Depth
+              깊이
               <input
                 id="engine-depth"
                 max={18}
@@ -413,11 +518,11 @@ export function ChessTreeApp() {
           <div className="analysis-panel-footer">
             <button className="secondary-button" onClick={() => resetTree(createInitialTree())} type="button">
               <RotateCcw size={16} />
-              Reset
+              초기화
             </button>
           </div>
 
-          {error ? <p className="error-text">{error}</p> : null}
+          {visibleError ? <p className="error-text">{visibleError}</p> : null}
         </aside>
       </section>
 
@@ -425,7 +530,7 @@ export function ChessTreeApp() {
         <div className="modal-backdrop">
           <section aria-labelledby="import-pgn-title" aria-modal="true" className="modal-panel" role="dialog">
             <header className="modal-header">
-              <h2 id="import-pgn-title">Import PGN</h2>
+              <h2 id="import-pgn-title">PGN 불러오기</h2>
             </header>
             <textarea
               autoFocus
@@ -437,11 +542,11 @@ export function ChessTreeApp() {
             />
             <div className="modal-actions">
               <button className="secondary-button" onClick={() => setImportDialogOpen(false)} type="button">
-                Cancel
+                취소
               </button>
               <button className="primary-button" onClick={handleImport} type="button">
                 <Upload size={16} />
-                Import
+                불러오기
               </button>
             </div>
           </section>
@@ -467,10 +572,10 @@ export function ChessTreeApp() {
             role="dialog"
           >
             <header className="modal-header">
-              <h2 id="next-move-title">Choose next move</h2>
+              <h2 id="next-move-title">다음 수 선택</h2>
             </header>
             <label className="field-label" htmlFor="next-move-choice">
-              Next move
+              다음 수
             </label>
             <select
               autoFocus
@@ -490,10 +595,10 @@ export function ChessTreeApp() {
             </select>
             <div className="modal-actions">
               <button className="secondary-button" onClick={() => setNextMoveDialog(null)} type="button">
-                Cancel
+                취소
               </button>
               <button className="primary-button" onClick={handleChooseNextMove} type="button">
-                Move
+                이동
               </button>
             </div>
           </section>
@@ -508,4 +613,50 @@ function isTextEditingTarget(target: EventTarget | null) {
   const tagName = element?.tagName;
 
   return tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT" || Boolean(element?.isContentEditable);
+}
+
+function formatSaveStatus({
+  configError,
+  currentAnalysisId,
+  dirty,
+  loaded,
+  saveStatus,
+  signedIn,
+}: {
+  configError: string;
+  currentAnalysisId: string | null;
+  dirty: boolean;
+  loaded: boolean;
+  saveStatus: SaveStatus;
+  signedIn: boolean;
+}) {
+  if (!loaded) {
+    return "불러오는 중";
+  }
+
+  if (configError) {
+    return "Firebase 설정 누락";
+  }
+
+  if (!signedIn) {
+    return "로그아웃됨";
+  }
+
+  if (saveStatus === "saving") {
+    return "저장 중";
+  }
+
+  if (saveStatus === "loading") {
+    return "분석 불러오는 중";
+  }
+
+  if (saveStatus === "error") {
+    return "저장 실패";
+  }
+
+  if (dirty || !currentAnalysisId) {
+    return "저장되지 않음";
+  }
+
+  return "저장됨";
 }
